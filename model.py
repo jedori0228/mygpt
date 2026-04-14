@@ -94,7 +94,7 @@ class SelfAttention(nn.Module):
 
         # o: (InShape_Batch, InShape_Context, )
         o = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
-        o = o.view(InShape_Batch, InShape_Context, -1)
+        o = o.contiguous().view(InShape_Batch, InShape_Context, -1)
 
         # Projection
         o = self.W_o(o)
@@ -233,7 +233,6 @@ class MyGPT(nn.Module):
             # inference: just return the logits directly
             return logits
 
-        return x
     
     @torch.inference_mode()
     def generate(self, input_tokens, max_tokens, seed=42):
