@@ -19,7 +19,12 @@ class DataLoader:
     def next_batch(self):
 
         ChunkSize = self.NBatch*self.ContextSize
-        
+
+        # Reset BEFORE reading if we'd go out of bounds
+        if self.current_pos + ChunkSize + 1 > len(self.data):
+            self.current_pos = 0
+            self.NFullLoop += 1
+
         this_data = self.data[self.current_pos:self.current_pos+(ChunkSize)+1] # +1 for target
         this_data = torch.from_numpy(this_data.astype(np.int64))
 
@@ -27,10 +32,6 @@ class DataLoader:
         y = this_data[1:].view(self.NBatch, self.ContextSize)
         
         self.current_pos += ChunkSize
-
-        if self.current_pos + (ChunkSize+1) > len(self.data):
-            self.current_pos = 0
-            self.NFullLoop += 1
 
         return x,y
     

@@ -82,7 +82,7 @@ class SelfAttention(nn.Module):
         InShape_Batch, InShape_Context, InShape_Emb = x.shape
 
         # q: (InShape_Batch, InShape_Context, NHeadQ*DHead)
-        # -> InShape_Batch, InShape_Context, NHeadQ, DHead)
+        # -> (InShape_Batch, InShape_Context, NHeadQ, DHead)
 
         q = self.W_q(x).view(InShape_Batch, InShape_Context, self.cfg.NHeadQ, self.cfg.DHead)
         k = self.W_k(x).view(InShape_Batch, InShape_Context, self.cfg.NHeadKV, self.cfg.DHead)
@@ -92,9 +92,14 @@ class SelfAttention(nn.Module):
         q = ApplyRoPE(q, cos_sin_RoPE)
         k = ApplyRoPE(k, cos_sin_RoPE)
 
+        # scaled_dot_product_attention expects (Batch, NHead, Context, DHead)
+        q = q.transpose(1, 2) # (InShape_Batch, NHeadQ, InShape_Context, DHead)
+        k = k.transpose(1, 2) # (InShape_Batch, NHeadKV, InShape_Context, DHead)
+        v = v.transpose(1, 2) # (InShape_Batch, NHeadKV, InShape_Context, DHead)
+
         # o: (InShape_Batch, InShape_Context, )
         o = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
-        o = o.contiguous().view(InShape_Batch, InShape_Context, -1)
+        o = o.transpose(1, 2).contiguous().view(InShape_Batch, InShape_Context, -1)
 
         # Projection
         o = self.W_o(o)
@@ -162,10 +167,12 @@ class MyGPT(nn.Module):
             "wte": nn.Embedding(config.DToken, config.DEmbed),
             "h": nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.NLayer)]),
         })
-        self.ln_te = nn.LayerNorm(config.DEmbed)
         self.ln_bl = nn.LayerNorm(config.DEmbed)
 
         self.lm_head = nn.Linear(config.DEmbed, config.DToken, bias=False)
+
+        # weight sharing scheme
+        self.transformer.wte.weight = self.lm_head.weight
 
         # RoPE cos and sin are precalculated
         arr_RoPE_cos, arr_RoPE_sin = self.PrecomputeRoPE(config.ContextSize * 10, config.DHead)
@@ -216,7 +223,6 @@ class MyGPT(nn.Module):
 
         # Token to Embedding
         x = self.transformer.wte(x_token)
-        x = self.ln_te(x)
 
         for i_layer, block in enumerate(self.transformer.h):
             x = block(x, cos_sin_RoPE)
@@ -250,8 +256,10 @@ class MyGPT(nn.Module):
 
         current_sequence = torch.tensor([input_tokens], dtype=torch.long, device=device) # add batch dim
         for _ in range(max_tokens):
+            # Take the last ContextSize of the current_sequnce for forward
+            context = current_sequence[:, -self.cfg.ContextSize:]
             # forward
-            logits = self.forward(current_sequence) # (B, T, vocab_size)
+            logits = self.forward(context) # (B, T, vocab_size)
             # Last token
             logits = logits[:, -1, :] # (B, vocab_size)
             # softmax
