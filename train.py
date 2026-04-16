@@ -179,8 +179,8 @@ def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, fl
 def main():
 
     MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
-    DATA_BASEDIR = os.envicron['DATA_BASEDIR']
-    TOKENIZER_BASEDIR = os.envicron['TOKENIZER_BASEDIR']
+    DATA_BASEDIR = os.environ['DATA_BASEDIR']
+    TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
 
     # --- CLI args ---
     parser = argparse.ArgumentParser(description="Train MyGPT")
@@ -247,7 +247,7 @@ def main():
         return
 
     # --- Data ---
-    data_dir    = DATA_BASEDIR
+    data_dir    = f'{DATA_BASEDIR}/{DATA_TYPE}/{TokenizerType}'
     dataloaders = {
         split: DataLoader(N_BATCH, config.ContextSize, data_dir, split)
         for split in ['train', 'val']
