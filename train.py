@@ -215,7 +215,7 @@ def main():
         # GlobalStepCounter is the true position in the full training run;
         # get_lr and all schedule logic use it so LR is consistent on resume.
         last_step = (local_step == N_MAX_ITER - 1)
-        lr = get_lr(GlobalStepCounter)
+        lr = get_lr(local_step if args.opt_lr_local else GlobalStepCounter)
         for pg in optimizer.param_groups:
             pg['lr'] = lr
 
