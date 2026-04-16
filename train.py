@@ -26,6 +26,8 @@ import tiktoken
 
 from model import ModelConfig, MyGPT
 from dataloader import DataLoader
+from utils.load_model import build_optimizer, load_model
+
 
 MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
 DATA_BASEDIR = os.environ['DATA_BASEDIR']
@@ -46,13 +48,13 @@ TokenizerType = 'EnKoMix' # 'gpt2' or 'EnKoMix'
 CONTEXT_SIZE    = 1024
 D_HEAD          = 64
 N_HEAD_Q        = 12
-N_HEAD_KV       = 12               # Set < N_HEAD_Q to enable GQA
+N_HEAD_KV       = 12
 N_LAYER         = 12
 
 # Training
 N_BATCH         = 4
 N_MAX_ITER      = 10000
-GRAD_ACCUM_STEPS = 16              # Effective batch = N_BATCH * GRAD_ACCUM_STEPS
+GRAD_ACCUM_STEPS = 16
 
 # Learning rate schedule (cosine decay with linear warmup)
 LR_MAX          = 3e-4
@@ -80,25 +82,6 @@ def get_lr(step: int) -> float:
         return LR_MIN
     progress = (step - WARMUP_STEPS) / (N_MAX_ITER - WARMUP_STEPS)
     return LR_MIN + 0.5 * (LR_MAX - LR_MIN) * (1.0 + math.cos(math.pi * progress))
-
-
-# ---------------------------------------------------------------------------
-# Optimizer: separate param groups to skip weight decay on norm/bias params
-# ---------------------------------------------------------------------------
-
-def build_optimizer(model: MyGPT) -> torch.optim.AdamW:
-    decay_params     = [p for n, p in model.named_parameters()
-                        if p.requires_grad and p.dim() >= 2]
-    no_decay_params  = [p for n, p in model.named_parameters()
-                        if p.requires_grad and p.dim() < 2]
-    param_groups = [
-        {"params": decay_params,    "weight_decay": WEIGHT_DECAY},
-        {"params": no_decay_params, "weight_decay": 0.0},
-    ]
-    n_decay   = sum(p.numel() for p in decay_params)
-    n_nodecay = sum(p.numel() for p in no_decay_params)
-    print(f"Optimizer: {n_decay:,} params with decay, {n_nodecay:,} without.")
-    return torch.optim.AdamW(param_groups, lr=LR_MAX, betas=(0.9, 0.95), eps=1e-8)
 
 
 # ---------------------------------------------------------------------------
@@ -135,43 +118,7 @@ def save_checkpoint(model: MyGPT, optimizer, config: ModelConfig,
         'config':      config,        # raw config, not compiled model attr
         'global_step': global_step,
     }, path)
-    print(f"  Checkpoint saved → {path}")
-
-
-def resolve_checkpoint_path(resume_arg: str) -> str | None:
-    """
-    Resolve --resume argument to an actual file path.
-    - 'auto'        : pick the highest-numbered ckpt_*.pt in LOG_BASEDIR
-    - a file path   : use it directly
-    - None / ''     : fresh training
-    """
-    if not resume_arg:
-        return None
-    if resume_arg == 'auto':
-        matches = sorted(glob.glob(os.path.join(LOG_BASEDIR, 'ckpt_*.pt')))
-        if not matches:
-            raise FileNotFoundError(f"No checkpoints found in '{LOG_BASEDIR}' for --resume auto")
-        return matches[-1]
-    if not os.path.isfile(resume_arg):
-        raise FileNotFoundError(f"Checkpoint not found: {resume_arg}")
-    return resume_arg
-
-
-def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, float]:
-    """
-    Load model + optimizer state from a checkpoint.
-    Returns global_step so the training loop can resume correctly.
-    """
-    print(f"Resuming from checkpoint: {path}")
-    ckpt = torch.load(path, map_location=device)
-    # Load into the underlying model if torch.compile wraps it
-    raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
-    raw_model.load_state_dict(ckpt['model'])
-    optimizer.load_state_dict(ckpt['optimizer'])
-    global_step   = ckpt['global_step']
-    print(f"  Resumed at global_step={global_step}")
-    return global_step
-
+    print(f"[Checkpoint] Saved → {path}")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -221,29 +168,26 @@ def main():
 
     torch.set_float32_matmul_precision('high')
 
-    # --- Model + optimizer (must be built BEFORE loading checkpoint) ---
-    model = MyGPT(config).to(device)
-    print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    model     = torch.compile(model)
-    optimizer = build_optimizer(model)
+    # --- Model ---
 
-    # --- Resume (if requested) ---
-    GlobalStepCounter = 0
-
-    ckpt_path = resolve_checkpoint_path(args.resume)
+    ckpt_path = args.resume
     if ckpt_path:
-        GlobalStepCounter = load_checkpoint(
-            ckpt_path, model, optimizer, device
-        )
+        model, optimizer, GlobalStepCounter = load_model(ckpt_path, device, WEIGHT_DECAY, LR_MAX)
+    else:
+        model = MyGPT(config).to(device)  
+        optimizer = build_optimizer(model, WEIGHT_DECAY, LR_MAX)
+        GlobalStepCounter = 0
 
-    # Remaining iterations to run from this point
-    remaining_steps = N_MAX_ITER - GlobalStepCounter
-    if remaining_steps <= 0:
-        print(f"GlobalStepCounter ({GlobalStepCounter}) >= N_MAX_ITER ({N_MAX_ITER}). Nothing to do.")
-        return
+    print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"GlobalStepCounter: {GlobalStepCounter}")
+
+    print(f"Compiling the model..")
+    model = torch.compile(model)
+    print("-> Done!")
 
     # --- Data ---
     data_dir    = f'{DATA_BASEDIR}/{DATA_TYPE}/{TokenizerType}'
+    print(f"Loading data: {data_dir}")
     dataloaders = {
         split: DataLoader(N_BATCH, config.ContextSize, data_dir, split)
         for split in ['train', 'val']
@@ -258,11 +202,14 @@ def main():
     # --- Training loop ---
     model.train()
 
-    for local_step in range(remaining_steps):
+    print("START TRAINING")
+    print("- N_MAX_ITER:", N_MAX_ITER)
+
+    for local_step in range(N_MAX_ITER):
 
         # GlobalStepCounter is the true position in the full training run;
         # get_lr and all schedule logic use it so LR is consistent on resume.
-        last_step = (local_step == remaining_steps - 1)
+        last_step = (local_step == N_MAX_ITER - 1)
         lr = get_lr(GlobalStepCounter)
         for pg in optimizer.param_groups:
             pg['lr'] = lr
@@ -270,10 +217,10 @@ def main():
         # -- Evaluation --
         if GlobalStepCounter % EVAL_EVERY == 0 or last_step:
             losses = estimate_loss(model, dataloaders, device)
-            print(f"step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
+            print(f"[Evalution] step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 
-            if GlobalStepCounter % CKPT_EVERY == 0 and GlobalStepCounter > 0:
-                save_checkpoint(model, optimizer, config, GlobalStepCounter)
+        if GlobalStepCounter % CKPT_EVERY == 0 or last_step:
+            save_checkpoint(model, optimizer, config, GlobalStepCounter)
 
         # -- Forward + backward with gradient accumulation --
         optimizer.zero_grad(set_to_none=True)
@@ -300,7 +247,7 @@ def main():
             dt_ms        = (t1 - t0) * 1000
             tokens_total = N_BATCH * config.ContextSize * GRAD_ACCUM_STEPS
             tok_per_sec  = tokens_total / (t1 - t0)
-            print(f"  step {GlobalStepCounter:5d} | loss {accumulated_loss:.6f} | lr {lr:.2e} | dt {dt_ms:.1f}ms | tok/sec {tok_per_sec:.0f}")
+            print(f"[Status] step {GlobalStepCounter:5d} | loss {accumulated_loss:.6f} | lr {lr:.2e} | dt {dt_ms:.1f}ms | tok/sec {tok_per_sec:.0f}")
 
         GlobalStepCounter += 1
 
