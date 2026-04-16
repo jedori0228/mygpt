@@ -130,7 +130,11 @@ def main():
     parser = argparse.ArgumentParser(description="Train MyGPT")
     parser.add_argument(
         '--resume', type=str, default='',
-        help="Path to checkpoint to resume from, or 'auto' for the latest in LOG_BASEDIR."
+        help="Path to checkpoint to resume from"
+    )
+    parser.add_argument(
+        '--opt_lr_local', type=bool, default=False,
+        help="Boolean to use local step to calculate learning rate. Default is False, and use Global step"
     )
     parser.add_argument(
         '--test_prompt', type=str, default='Hello, I am a language model.',
@@ -219,7 +223,7 @@ def main():
             losses = estimate_loss(model, dataloaders, device)
             print(f"[Evalution] step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 
-        if GlobalStepCounter % CKPT_EVERY == 0 or last_step:
+        if (GlobalStepCounter % CKPT_EVERY == 0 and local_step>0) or last_step:
             save_checkpoint(model, optimizer, config, GlobalStepCounter)
 
         # -- Forward + backward with gradient accumulation --
