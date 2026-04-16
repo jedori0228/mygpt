@@ -11,10 +11,12 @@ import glob
 import argparse
 
 import torch
-import tiktoken
 
 from model import ModelConfig, MyGPT
 
+MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
+DATA_BASEDIR = os.environ['DATA_BASEDIR']
+TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,23 +80,35 @@ def main():
     print(f"Using device: {device}\n")
 
     # --- Tokenizer ---
-    enc    = tiktoken.get_encoding("gpt2")
-    encode = lambda s: enc.encode(s)
-    decode = lambda ids: enc.decode(ids)
+    #TokenizerType = 'gpt2'
+    TokenizerType = 'EnKoMix'
+    if TokenizerType == 'gpt2':
+        import tiktoken
+        enc_model = tiktoken.get_encoding("gpt2")
+        encode_func = lambda text: enc_model.encode_ordinary(text)
+        decode_func = lambda ids: enc_model.decode(ids)
+        NVocab = enc_model.n_vocab
+    elif TokenizerType == 'EnKoMix':
+        from tokenizers import Tokenizer
+        custom_tokenizer = Tokenizer.from_file(f"{TOKENIZER_BASEDIR}/EnKoMix/tokenizer.json")
+        # HuggingFace tokenizers return an object; we need the .ids attribute
+        encode_func = lambda text: custom_tokenizer.encode(text).ids
+        decode_func = lambda ids: custom_tokenizer.decode(ids)
+        NVocab = custom_tokenizer.get_vocab_size()
 
     # --- Load model ---
     ckpt_path = resolve_checkpoint_path(args.checkpoint, args.log_dir)
     model     = load_model(ckpt_path, device)
 
     # --- Generate ---
-    input_ids = encode(args.prompt)
+    input_ids = encode_func(args.prompt)
     print(f"\nPrompt ({len(input_ids)} tokens):")
     print(f"  {args.prompt}")
     print(f"\nGenerating {args.max_tokens} tokens...\n")
     print("-" * 60)
 
     output_ids  = model.generate(input_ids, max_tokens=args.max_tokens, seed=args.seed)
-    output_text = decode(output_ids[0].tolist())
+    output_text = decode_func(output_ids[0].tolist())
     print(output_text)
     print("-" * 60)
     print(f"\nTotal tokens: {len(output_ids[0])} ({len(input_ids)} prompt + {args.max_tokens} generated)")
