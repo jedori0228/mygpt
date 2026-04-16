@@ -126,7 +126,7 @@ def estimate_loss(model, dataloaders, device) -> dict:
 # ---------------------------------------------------------------------------
 
 def save_checkpoint(model: MyGPT, optimizer, config: ModelConfig,
-                    global_step: int, val_loss: float):
+                    global_step: int):
     os.makedirs(LOG_BASEDIR, exist_ok=True)
     path = os.path.join(LOG_BASEDIR, f'ckpt_{global_step:05d}.pt')
     torch.save({
@@ -134,7 +134,6 @@ def save_checkpoint(model: MyGPT, optimizer, config: ModelConfig,
         'optimizer':   optimizer.state_dict(),
         'config':      config,        # raw config, not compiled model attr
         'global_step': global_step,
-        'val_loss':    val_loss,
     }, path)
     print(f"  Checkpoint saved → {path}")
 
@@ -161,7 +160,7 @@ def resolve_checkpoint_path(resume_arg: str) -> str | None:
 def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, float]:
     """
     Load model + optimizer state from a checkpoint.
-    Returns (global_step, best_val_loss) so the training loop can resume correctly.
+    Returns global_step so the training loop can resume correctly.
     """
     print(f"Resuming from checkpoint: {path}")
     ckpt = torch.load(path, map_location=device)
@@ -170,9 +169,8 @@ def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, fl
     raw_model.load_state_dict(ckpt['model'])
     optimizer.load_state_dict(ckpt['optimizer'])
     global_step   = ckpt['global_step']
-    best_val_loss = ckpt.get('val_loss', float('inf'))
-    print(f"  Resumed at global_step={global_step}, val_loss={best_val_loss:.4f}")
-    return global_step, best_val_loss
+    print(f"  Resumed at global_step={global_step}")
+    return global_step
 
 
 # ---------------------------------------------------------------------------
@@ -231,11 +229,10 @@ def main():
 
     # --- Resume (if requested) ---
     GlobalStepCounter = 0
-    best_val_loss     = float('inf')
 
     ckpt_path = resolve_checkpoint_path(args.resume)
     if ckpt_path:
-        GlobalStepCounter, best_val_loss = load_checkpoint(
+        GlobalStepCounter = load_checkpoint(
             ckpt_path, model, optimizer, device
         )
 
@@ -275,11 +272,8 @@ def main():
             losses = estimate_loss(model, dataloaders, device)
             print(f"step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 
-            if losses['val'] < best_val_loss:
-                best_val_loss = losses['val']
-                save_checkpoint(model, optimizer, config, GlobalStepCounter, best_val_loss)
-            elif GlobalStepCounter % CKPT_EVERY == 0 and GlobalStepCounter > 0:
-                save_checkpoint(model, optimizer, config, GlobalStepCounter, losses['val'])
+            if GlobalStepCounter % CKPT_EVERY == 0 and GlobalStepCounter > 0:
+                save_checkpoint(model, optimizer, config, GlobalStepCounter)
 
         # -- Forward + backward with gradient accumulation --
         optimizer.zero_grad(set_to_none=True)
@@ -315,7 +309,6 @@ def main():
     ids = encode_func(args.test_prompt)
     out = decode_func(model.generate(ids, max_tokens=100)[0].tolist())
     print(f"  {out}")
-    print(f"\nBest val loss: {best_val_loss:.4f}")
 
 
 if __name__ == '__main__':
