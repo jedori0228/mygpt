@@ -20,30 +20,13 @@ DATA_BASEDIR = os.environ['DATA_BASEDIR']
 TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def resolve_checkpoint_path(ckpt_arg: str, log_dir: str) -> str:
-    if ckpt_arg == 'auto':
-        matches = sorted(glob.glob(os.path.join(log_dir, 'ckpt_*.pt')))
-        if not matches:
-            raise FileNotFoundError(f"No checkpoints found in '{log_dir}'")
-        return matches[-1]
-    if not os.path.isfile(ckpt_arg):
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_arg}")
-    return ckpt_arg
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Generate text from a MyGPT checkpoint")
     parser.add_argument('--checkpoint', type=str, default='auto',
-                        help="Path to checkpoint file, or 'auto' for latest in --log_dir")
-    parser.add_argument('--log_dir',    type=str, default='logs',
-                        help="Directory to search when --checkpoint=auto (default: logs)")
+                        help="Path to checkpoint file")
     parser.add_argument('--prompt',     type=str, default=None,
                         help="Input text to condition generation on")
     parser.add_argument('--prompt_file', type=str, default=None,
@@ -77,7 +60,7 @@ def main():
         NVocab = custom_tokenizer.get_vocab_size()
 
     # --- Load model ---
-    ckpt_path = resolve_checkpoint_path(args.checkpoint, args.log_dir)
+    ckpt_path = args.checkpoint
     model     = load_model(ckpt_path, device)
 
     # --- Prompt ---
@@ -95,7 +78,7 @@ def main():
     # --- Generate ---
     input_ids = encode_func(prompt_text)
     print(f"\nPrompt ({len(input_ids)} tokens):")
-    print(f"  {prompt_text}")
+    print(f"{prompt_text}")
     print(f"\nGenerating {args.max_tokens} tokens...\n")
     print("-" * 60)
 
