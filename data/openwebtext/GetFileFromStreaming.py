@@ -3,8 +3,10 @@ import numpy as np
 from tqdm import tqdm
 from datasets import load_dataset
 
-WD = '/Users/jskim/Documents/MLStudy/mygpt'
-DataBaseDir = f'{WD}/data'
+InputBaseDir = '/exp/dune/data/users/jskim/ml'
+DataBaseDir = f'{InputBaseDir}'
+TokenizerBasedir = f'{InputBaseDir}/tokenizer'
+
 DataName = 'openwebtext'
 
 # --- Tokenizer selection ---
@@ -19,7 +21,7 @@ if TokenizerType == 'gpt2':
     eot_token_id = enc_model.eot_token
 elif TokenizerType == 'EnKoMix':
     from tokenizers import Tokenizer
-    custom_tokenizer = Tokenizer.from_file(f"{WD}/tokenizer/EnKoMix/tokenizer.json")
+    custom_tokenizer = Tokenizer.from_file(f"{TokenizerBasedir}/EnKoMix/tokenizer.json")
     # HuggingFace tokenizers return an object; we need the .ids attribute
     encode_func = lambda text: custom_tokenizer.encode(text).ids
     # Get ID for </s> (or whichever you set as EOT)
@@ -46,7 +48,7 @@ streams = {'val': val_stream, 'train': train_stream}
 for split, stream in streams.items():
     output_path = os.path.join(DataBaseDir, DataName)
     os.makedirs(output_path, exist_ok=True)
-    filename = f'{output_path}/{split}.bin'
+    filename = f'{output_path}/{TokenizerType}/{split}.bin'
     
     pbar_total = val_size if split == 'val' else (total_rows - val_size)
     

@@ -9,7 +9,7 @@ Usage:
     # Resume from a specific checkpoint
     python train.py --resume logs/ckpt_01000.pt
 
-    # Resume from the latest checkpoint in LOG_DIR automatically
+    # Resume from the latest checkpoint in LOG_BASEDIR automatically
     python train.py --resume auto
 """
 
@@ -27,17 +27,20 @@ import tiktoken
 from model import ModelConfig, MyGPT
 from dataloader import DataLoader
 
+MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
+DATA_BASEDIR = os.environ['DATA_BASEDIR']
+TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
+LOG_BASEDIR = os.environ['LOG_BASEDIR']
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 # I/O
-DATA_TYPE       = 'shakespeare'   # 'shakespeare' or 'openwebtext'
-LOG_DIR         = 'logs'
+DATA_TYPE       = 'openwebtext'   # 'shakespeare' or 'openwebtext'
 
 # Tokenizer
-TokenizerType = 'gpt2' # 'gpt2' or 'EnKoMix'
+TokenizerType = 'EnKoMix' # 'gpt2' or 'EnKoMix'
 
 # Model
 CONTEXT_SIZE    = 1024
@@ -48,7 +51,7 @@ N_LAYER         = 12
 
 # Training
 N_BATCH         = 4
-N_MAX_ITER      = 100
+N_MAX_ITER      = 10000
 GRAD_ACCUM_STEPS = 16              # Effective batch = N_BATCH * GRAD_ACCUM_STEPS
 
 # Learning rate schedule (cosine decay with linear warmup)
@@ -124,8 +127,8 @@ def estimate_loss(model, dataloaders, device) -> dict:
 
 def save_checkpoint(model: MyGPT, optimizer, config: ModelConfig,
                     global_step: int, val_loss: float):
-    os.makedirs(LOG_DIR, exist_ok=True)
-    path = os.path.join(LOG_DIR, f'ckpt_{global_step:05d}.pt')
+    os.makedirs(LOG_BASEDIR, exist_ok=True)
+    path = os.path.join(LOG_BASEDIR, f'ckpt_{global_step:05d}.pt')
     torch.save({
         'model':       model.state_dict(),
         'optimizer':   optimizer.state_dict(),
@@ -139,16 +142,16 @@ def save_checkpoint(model: MyGPT, optimizer, config: ModelConfig,
 def resolve_checkpoint_path(resume_arg: str) -> str | None:
     """
     Resolve --resume argument to an actual file path.
-    - 'auto'        : pick the highest-numbered ckpt_*.pt in LOG_DIR
+    - 'auto'        : pick the highest-numbered ckpt_*.pt in LOG_BASEDIR
     - a file path   : use it directly
     - None / ''     : fresh training
     """
     if not resume_arg:
         return None
     if resume_arg == 'auto':
-        matches = sorted(glob.glob(os.path.join(LOG_DIR, 'ckpt_*.pt')))
+        matches = sorted(glob.glob(os.path.join(LOG_BASEDIR, 'ckpt_*.pt')))
         if not matches:
-            raise FileNotFoundError(f"No checkpoints found in '{LOG_DIR}' for --resume auto")
+            raise FileNotFoundError(f"No checkpoints found in '{LOG_BASEDIR}' for --resume auto")
         return matches[-1]
     if not os.path.isfile(resume_arg):
         raise FileNotFoundError(f"Checkpoint not found: {resume_arg}")
@@ -178,15 +181,11 @@ def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, fl
 
 def main():
 
-    MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
-    DATA_BASEDIR = os.environ['DATA_BASEDIR']
-    TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
-
     # --- CLI args ---
     parser = argparse.ArgumentParser(description="Train MyGPT")
     parser.add_argument(
         '--resume', type=str, default='',
-        help="Path to checkpoint to resume from, or 'auto' for the latest in LOG_DIR."
+        help="Path to checkpoint to resume from, or 'auto' for the latest in LOG_BASEDIR."
     )
     parser.add_argument(
         '--test_prompt', type=str, default='Hello, I am a language model.',
