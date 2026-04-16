@@ -36,6 +36,9 @@ from dataloader import DataLoader
 DATA_TYPE       = 'shakespeare'   # 'shakespeare' or 'openwebtext'
 LOG_DIR         = 'logs'
 
+# Tokenizer
+TokenizerType = 'gpt2' # 'gpt2' or 'EnKoMix'
+
 # Model
 CONTEXT_SIZE    = 1024
 D_HEAD          = 64
@@ -44,9 +47,9 @@ N_HEAD_KV       = 6               # Set < N_HEAD_Q to enable GQA
 N_LAYER         = 6
 
 # Training
-N_BATCH         = 4
+N_BATCH         = 2
 N_MAX_ITER      = 100
-GRAD_ACCUM_STEPS = 4              # Effective batch = N_BATCH * GRAD_ACCUM_STEPS
+GRAD_ACCUM_STEPS = 16              # Effective batch = N_BATCH * GRAD_ACCUM_STEPS
 
 # Learning rate schedule (cosine decay with linear warmup)
 LR_MAX          = 3e-4
@@ -175,12 +178,17 @@ def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, fl
 
 def main():
 
+    WD = '/Users/jskim/Documents/MLStudy/mygpt'
+
     # --- CLI args ---
     parser = argparse.ArgumentParser(description="Train MyGPT")
     parser.add_argument(
         '--resume', type=str, default='',
         help="Path to checkpoint to resume from, or 'auto' for the latest in LOG_DIR."
     )
+    parser.add_argument(
+        '--test_prompt', type=str, default='Hello, I am a language model.',
+        help="Input text to test generation")
     args = parser.parse_args()
 
     # --- Device ---
@@ -189,13 +197,23 @@ def main():
     print(f"Using device: {device}")
 
     # --- Tokenizer ---
-    enc    = tiktoken.get_encoding("gpt2")
-    encode = lambda s: enc.encode(s)
-    decode = lambda ids: enc.decode(ids)
+    if TokenizerType == 'gpt2':
+        import tiktoken
+        enc_model = tiktoken.get_encoding("gpt2")
+        encode_func = lambda text: enc_model.encode_ordinary(text)
+        decode_func = lambda ids: enc_model.decode(ids)
+        NVocab = enc_model.n_vocab
+    elif TokenizerType == 'EnKoMix':
+        from tokenizers import Tokenizer
+        custom_tokenizer = Tokenizer.from_file(f"{WD}/tokenizer/EnKoMix/tokenizer.json")
+        # HuggingFace tokenizers return an object; we need the .ids attribute
+        encode_func = lambda text: custom_tokenizer.encode(text).ids
+        decode_func = lambda ids: custom_tokenizer.decode(ids)
+        NVocab = custom_tokenizer.get_vocab_size()
 
     # --- Model config ---
     config              = ModelConfig()
-    config.DToken       = enc.n_vocab
+    config.DToken       = NVocab
     config.ContextSize  = CONTEXT_SIZE
     config.DHead        = D_HEAD
     config.NHeadQ       = N_HEAD_Q
@@ -233,8 +251,8 @@ def main():
 
     # --- Sanity check: generate before training ---
     print("\n[Before training]")
-    ids = encode("Hello")
-    out = decode(model.generate(ids, max_tokens=20)[0].tolist())
+    ids = encode_func(args.test_prompt)
+    out = decode_func(model.generate(ids, max_tokens=100)[0].tolist())
     print(f"  {out}\n")
 
     # --- Training loop ---
@@ -264,6 +282,7 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
 
+        t0 = time.time()
         for micro_step in range(GRAD_ACCUM_STEPS):
             xb, yb = dataloaders['train'].next_batch()
             xb, yb = xb.to(device), yb.to(device)
@@ -278,16 +297,20 @@ def main():
 
         if device == 'mps':
             torch.mps.synchronize()
+        t1 = time.time()
 
         if GlobalStepCounter % LOG_EVERY == 0 or last_step:
-            print(f"  step {GlobalStepCounter:5d} | loss {accumulated_loss:.6f} | lr {lr:.2e}")
+            dt_ms        = (t1 - t0) * 1000
+            tokens_total = N_BATCH * config.ContextSize * GRAD_ACCUM_STEPS
+            tok_per_sec  = tokens_total / (t1 - t0)
+            print(f"  step {GlobalStepCounter:5d} | loss {accumulated_loss:.6f} | lr {lr:.2e} | dt {dt_ms:.1f}ms | tok/sec {tok_per_sec:.0f}")
 
         GlobalStepCounter += 1
 
     # --- Final generation ---
     print("\n[After training]")
-    ids = encode("Hello")
-    out = decode(model.generate(ids, max_tokens=40)[0].tolist())
+    ids = encode_func(args.test_prompt)
+    out = decode_func(model.generate(ids, max_tokens=100)[0].tolist())
     print(f"  {out}")
     print(f"\nBest val loss: {best_val_loss:.4f}")
 
