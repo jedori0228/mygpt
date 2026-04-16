@@ -13,6 +13,7 @@ import argparse
 import torch
 
 from model import ModelConfig, MyGPT
+from utils.load_model import load_model
 
 MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
 DATA_BASEDIR = os.environ['DATA_BASEDIR']
@@ -33,29 +34,6 @@ def resolve_checkpoint_path(ckpt_arg: str, log_dir: str) -> str:
     return ckpt_arg
 
 
-def load_model(ckpt_path: str, device: str) -> MyGPT:
-    # PyTorch 2.6+ defaults weights_only=True, which blocks custom classes.
-    # Allowlisting ModelConfig is the safe fix — avoids arbitrary code execution
-    # while still supporting our known dataclass.
-    torch.serialization.add_safe_globals([ModelConfig])
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
-
-    config = ckpt['config']
-    model  = MyGPT(config).to(device)
-    # Strip _orig_mod. prefix if checkpoint was saved from a torch.compile()d model
-    state_dict = ckpt["model"]
-    state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
-    model.load_state_dict(state_dict)
-    model.eval()
-
-    step     = ckpt.get('global_step', '?')
-    val_loss = ckpt.get('val_loss', float('nan'))
-    print(f"Loaded checkpoint: {ckpt_path}")
-    print(f"  global_step={step} | val_loss={val_loss:.4f}")
-    print(f"  {sum(p.numel() for p in model.parameters()):,} parameters")
-    return model
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -66,8 +44,10 @@ def main():
                         help="Path to checkpoint file, or 'auto' for latest in --log_dir")
     parser.add_argument('--log_dir',    type=str, default='logs',
                         help="Directory to search when --checkpoint=auto (default: logs)")
-    parser.add_argument('--prompt',     type=str, required=True,
+    parser.add_argument('--prompt',     type=str, default=None,
                         help="Input text to condition generation on")
+    parser.add_argument('--prompt_file', type=str, default=None,
+                    help="Path to a .txt file containing the prompt (UTF-8)")
     parser.add_argument('--max_tokens', type=int, default=100,
                         help="Number of tokens to generate (default: 100)")
     parser.add_argument('--seed',       type=int, default=42,
@@ -100,10 +80,22 @@ def main():
     ckpt_path = resolve_checkpoint_path(args.checkpoint, args.log_dir)
     model     = load_model(ckpt_path, device)
 
+    # --- Prompt ---
+    if args.prompt_file:
+        try:
+            with open(args.prompt_file, 'r', encoding='utf-8') as f:
+                prompt_text = f.read().strip()
+        except UnicodeDecodeError:
+            # Fallback for common Korean Windows encoding
+            with open(args.prompt_file, 'r', encoding='cp949') as f:
+                prompt_text = f.read().strip()
+    else:
+        prompt_text = args.prompt
+
     # --- Generate ---
-    input_ids = encode_func(args.prompt)
+    input_ids = encode_func(prompt_text)
     print(f"\nPrompt ({len(input_ids)} tokens):")
-    print(f"  {args.prompt}")
+    print(f"  {prompt_text}")
     print(f"\nGenerating {args.max_tokens} tokens...\n")
     print("-" * 60)
 
