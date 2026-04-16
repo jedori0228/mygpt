@@ -133,8 +133,9 @@ def main():
         help="Path to checkpoint to resume from"
     )
     parser.add_argument(
-        '--opt_lr_local', type=bool, default=False,
-        help="Boolean to use local step to calculate learning rate. Default is False, and use Global step"
+        '--opt_lr_local',
+        action='store_true',
+        help="Use local step to calculate learning rate instead of Global step"
     )
     parser.add_argument(
         '--test_prompt', type=str, default='Hello, I am a language model.',
