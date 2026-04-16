@@ -42,12 +42,12 @@ TokenizerType = 'gpt2' # 'gpt2' or 'EnKoMix'
 # Model
 CONTEXT_SIZE    = 1024
 D_HEAD          = 64
-N_HEAD_Q        = 6
-N_HEAD_KV       = 6               # Set < N_HEAD_Q to enable GQA
-N_LAYER         = 6
+N_HEAD_Q        = 12
+N_HEAD_KV       = 12               # Set < N_HEAD_Q to enable GQA
+N_LAYER         = 12
 
 # Training
-N_BATCH         = 2
+N_BATCH         = 4
 N_MAX_ITER      = 100
 GRAD_ACCUM_STEPS = 16              # Effective batch = N_BATCH * GRAD_ACCUM_STEPS
 
@@ -178,7 +178,9 @@ def load_checkpoint(path: str, model: MyGPT, optimizer, device) -> tuple[int, fl
 
 def main():
 
-    WD = '/Users/jskim/Documents/MLStudy/mygpt'
+    MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
+    DATA_BASEDIR = os.envicron['DATA_BASEDIR']
+    TOKENIZER_BASEDIR = os.envicron['TOKENIZER_BASEDIR']
 
     # --- CLI args ---
     parser = argparse.ArgumentParser(description="Train MyGPT")
@@ -205,7 +207,7 @@ def main():
         NVocab = enc_model.n_vocab
     elif TokenizerType == 'EnKoMix':
         from tokenizers import Tokenizer
-        custom_tokenizer = Tokenizer.from_file(f"{WD}/tokenizer/EnKoMix/tokenizer.json")
+        custom_tokenizer = Tokenizer.from_file(f"{TOKENIZER_BASEDIR}/EnKoMix/tokenizer.json")
         # HuggingFace tokenizers return an object; we need the .ids attribute
         encode_func = lambda text: custom_tokenizer.encode(text).ids
         decode_func = lambda ids: custom_tokenizer.decode(ids)
@@ -219,6 +221,8 @@ def main():
     config.NHeadQ       = N_HEAD_Q
     config.NHeadKV      = N_HEAD_KV
     config.NLayer       = N_LAYER
+
+    torch.set_float32_matmul_precision('high')
 
     # --- Model + optimizer (must be built BEFORE loading checkpoint) ---
     model = MyGPT(config).to(device)
@@ -243,7 +247,7 @@ def main():
         return
 
     # --- Data ---
-    data_dir    = f'data/{DATA_TYPE}'
+    data_dir    = DATA_BASEDIR
     dataloaders = {
         split: DataLoader(N_BATCH, config.ContextSize, data_dir, split)
         for split in ['train', 'val']
