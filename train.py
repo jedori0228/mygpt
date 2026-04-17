@@ -28,7 +28,6 @@ from model import ModelConfig, MyGPT
 from dataloader import DataLoader
 from utils.load_model import build_optimizer, load_model
 
-
 MODEL_BAESDIR = os.environ['MODEL_BASEDIR']
 DATA_BASEDIR = os.environ['DATA_BASEDIR']
 TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
@@ -38,11 +37,14 @@ LOG_BASEDIR = os.environ['LOG_BASEDIR']
 # Configuration
 # ---------------------------------------------------------------------------
 
-# I/O
-DATA_TYPE       = 'openwebtext'   # 'shakespeare' or 'openwebtext'
-
 # Tokenizer
 TokenizerType = 'EnKoMix' # 'gpt2' or 'EnKoMix'
+
+# I/O — list of (data_dir_suffix, weight) pairs; weights are normalized automatically
+DATA_SOURCES = [
+    (f'{DATA_BASEDIR}/openwebtext/{TokenizerType}', 0.7),
+    (f'{DATA_BASEDIR}/KOREAN-WEBTEXT/{TokenizerType}', 0.3),
+]
 
 # Model
 CONTEXT_SIZE    = 1024
@@ -59,7 +61,8 @@ GRAD_ACCUM_STEPS = 16
 # Learning rate schedule (cosine decay with linear warmup)
 LR_MAX          = 3e-4
 LR_MIN          = 3e-5
-WARMUP_STEPS    = 100
+WARMUP_FRAC     = 0.0033333333
+WARMUP_STEPS    = int(WARMUP_FRAC*N_MAX_ITER)
 
 # Regularization
 WEIGHT_DECAY    = 0.1             # Applied to non-bias, non-norm params only
@@ -68,8 +71,8 @@ GRAD_CLIP       = 1.0             # Set to 0.0 to disable
 # Logging & evaluation
 LOG_EVERY       = 50
 EVAL_EVERY      = 500
-EVAL_ITERS      = 100
-CKPT_EVERY      = 500             # Save checkpoint every N steps
+EVAL_ITERS      = 200
+CKPT_EVERY      = 2000             # Save checkpoint every N steps
 
 # ---------------------------------------------------------------------------
 # Learning rate schedule
@@ -109,9 +112,10 @@ def estimate_loss(model, dataloaders, device) -> dict:
 # ---------------------------------------------------------------------------
 
 def save_checkpoint(model: MyGPT, optimizer, config: ModelConfig,
-                    global_step: int):
+                    global_step: int, name: None):
     os.makedirs(LOG_BASEDIR, exist_ok=True)
-    path = os.path.join(LOG_BASEDIR, f'ckpt_{global_step:05d}.pt')
+    CheckPointFileName = f'ckpt_{global_step:09d}.pt' if (name is None) else f'ckpt_{name}_{global_step:09d}.pt'
+    path = os.path.join(LOG_BASEDIR, CheckPointFileName)
     torch.save({
         'model':       model.state_dict(),
         'optimizer':   optimizer.state_dict(),
@@ -140,6 +144,10 @@ def main():
     parser.add_argument(
         '--test_prompt', type=str, default='Hello, I am a language model.',
         help="Input text to test generation")
+    parser.add_argument(
+        '--name', type=str, default=None,
+        help="Name of the job"
+    )
     args = parser.parse_args()
 
     # --- Device ---
@@ -191,10 +199,9 @@ def main():
     print("-> Done!")
 
     # --- Data ---
-    data_dir    = f'{DATA_BASEDIR}/{DATA_TYPE}/{TokenizerType}'
-    print(f"Loading data: {data_dir}")
+    print(f"Data sources: {DATA_SOURCES}")
     dataloaders = {
-        split: DataLoader(N_BATCH, config.ContextSize, data_dir, split)
+        split: DataLoader(N_BATCH, config.ContextSize, sources=DATA_SOURCES, split=split)
         for split in ['train', 'val']
     }
 
@@ -221,6 +228,7 @@ def main():
 
         # -- Evaluation --
         if GlobalStepCounter % EVAL_EVERY == 0 or last_step:
+            # Train/Val loss calculation
             losses = estimate_loss(model, dataloaders, device)
             print(f"[Evalution] step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 

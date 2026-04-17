@@ -3,9 +3,9 @@ import numpy as np
 from tqdm import tqdm
 from datasets import load_dataset
 
-InputBaseDir = '/exp/dune/data/users/jskim/ml'
-DataBaseDir = f'{InputBaseDir}'
-TokenizerBasedir = f'{InputBaseDir}/tokenizer'
+MODEL_BASEDIR = os.environ['MODEL_BASEDIR']
+DATA_BASEDIR = os.environ['DATA_BASEDIR']
+TOKENIZER_BASEDIR = os.environ['TOKENIZER_BASEDIR']
 
 DataName = 'openwebtext'
 
@@ -21,7 +21,7 @@ if TokenizerType == 'gpt2':
     eot_token_id = enc_model.eot_token
 elif TokenizerType == 'EnKoMix':
     from tokenizers import Tokenizer
-    custom_tokenizer = Tokenizer.from_file(f"{TokenizerBasedir}/EnKoMix/tokenizer.json")
+    custom_tokenizer = Tokenizer.from_file(f"{TOKENIZER_BASEDIR}/EnKoMix/tokenizer.json")
     # HuggingFace tokenizers return an object; we need the .ids attribute
     encode_func = lambda text: custom_tokenizer.encode(text).ids
     # Get ID for </s> (or whichever you set as EOT)
@@ -46,7 +46,7 @@ streams = {'val': val_stream, 'train': train_stream}
 
 # --- Processing Loop ---
 for split, stream in streams.items():
-    output_path = os.path.join(DataBaseDir, DataName)
+    output_path = os.path.join(DATA_BASEDIR, DataName)
     os.makedirs(output_path, exist_ok=True)
     filename = f'{output_path}/{TokenizerType}/{split}.bin'
     
