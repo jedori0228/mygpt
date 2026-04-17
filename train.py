@@ -251,7 +251,7 @@ def main():
         # -- Evaluation --
         if GlobalStepCounter % EVAL_EVERY == 0 or last_step:
             # Train/Val loss calculation
-            losses = estimate_loss(model, dataloaders, device, autocast_ctx:)
+            losses = estimate_loss(model, dataloaders, device, autocast_ctx)
             print(f"[Evalution] step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 
         if (GlobalStepCounter % CKPT_EVERY == 0 and local_step>0) or last_step:
