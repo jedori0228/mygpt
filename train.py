@@ -22,7 +22,6 @@ import glob
 import torch
 from torch import nn
 from torch.nn import functional as F
-import tiktoken
 
 from model import ModelConfig, MyGPT
 from dataloader import DataLoader
@@ -92,7 +91,7 @@ def get_lr(step: int) -> float:
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def estimate_loss(model, dataloaders, device) -> dict:
+def estimate_loss(model, dataloaders, device, autocast_ctx) -> dict:
     model.eval()
     out = {}
     for split, dl in dataloaders.items():
@@ -100,12 +99,12 @@ def estimate_loss(model, dataloaders, device) -> dict:
         for k in range(EVAL_ITERS):
             X, Y = dl.next_batch()
             X, Y = X.to(device), Y.to(device)
-            loss = model(X, Y)
+            with autocast_ctx:
+                loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean().item()
     model.train()
     return out
-
 
 # ---------------------------------------------------------------------------
 # Checkpoint helpers
@@ -151,9 +150,32 @@ def main():
     args = parser.parse_args()
 
     # --- Device ---
-    device = (torch.accelerator.current_accelerator().type
-              if torch.accelerator.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    elif torch.mps.is_available():
+        device = torch.device("mps")
+        print(f"Using mps")
+    else:
+        device = torch.device("cpu")
+        print("GPU not found, falling back to CPU.")
+
     print(f"Using device: {device}")
+
+    # --- Precision ---
+    if device.type == 'cuda':
+        use_bf16 = torch.cuda.is_bf16_supported()
+        ptdtype = torch.bfloat16 if use_bf16 else torch.float16
+        autocast_ctx = torch.autocast(device_type='cuda', dtype=ptdtype)
+    elif device.type == 'mps':
+        # MPS typically uses float16 for mixed precision
+        # Note: torch.autocast with 'mps' is available in newer PyTorch versions (2.3+)
+        autocast_ctx = torch.autocast(device_type='mps', dtype=torch.float16)
+    else:
+        # CPU fallback
+        autocast_ctx = torch.autocast(device_type='cpu', enabled=False)
+
+    print(f"Precision: {ptdtype if device.type == 'cuda' else 'float16 if mps else float32'}")
 
     # --- Tokenizer ---
     if TokenizerType == 'gpt2':
@@ -229,7 +251,7 @@ def main():
         # -- Evaluation --
         if GlobalStepCounter % EVAL_EVERY == 0 or last_step:
             # Train/Val loss calculation
-            losses = estimate_loss(model, dataloaders, device)
+            losses = estimate_loss(model, dataloaders, device, autocast_ctx:)
             print(f"[Evalution] step {GlobalStepCounter:5d} | train loss {losses['train']:.4f} | val loss {losses['val']:.4f}")
 
         if (GlobalStepCounter % CKPT_EVERY == 0 and local_step>0) or last_step:
@@ -243,7 +265,8 @@ def main():
         for micro_step in range(GRAD_ACCUM_STEPS):
             xb, yb = dataloaders['train'].next_batch()
             xb, yb = xb.to(device), yb.to(device)
-            loss   = model(xb, yb) / GRAD_ACCUM_STEPS
+            with autocast_ctx:
+                loss = model(xb, yb) / GRAD_ACCUM_STEPS
             loss.backward()
             accumulated_loss += loss.item()
 
